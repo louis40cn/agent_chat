@@ -1,0 +1,5 @@
+.streamlit/
+*.pyc
+.venv/
+.vscode/
+.devcontainer/
