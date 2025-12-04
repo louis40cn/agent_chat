@@ -15,6 +15,11 @@ BAILIAN_WORKSPACEID = st.secrets["bailian"]["BAILIAN_WORKSPACEID"]
 
 BAILIAN_AGENT_LIST = [
     {
+        'agent_name': '问小巴（文件问答）',
+        'agent_id': '8f0b8bf23a5647bd9e8af632890525ff',
+        'model_id': 'qwen-long',
+    },
+    {
         'agent_name': '问小巴（VIP）',
         'agent_id': '7d07727f0ef54bfd806e3a83a66c0c93',
         'model_id': 'deepseek-r1',
@@ -36,18 +41,23 @@ bailian_client = BailianLKE(
 st.set_page_config(page_title="问小巴测试", layout="wide")
 
 # Initialize session state variables if they don't exist
+curr_index = 0
 if "messages" not in st.session_state:
     st.session_state.messages = []  # Stores the history of chat messages for the CURRENT session
 if "api_key" not in st.session_state:
     st.session_state.api_key = st.secrets["dashscope"]["api_key"]
 if "bailian_agent_id" not in st.session_state: # Specific Agent ID for Bailian
-    st.session_state.bailian_agent_id = BAILIAN_AGENT_LIST[0]["agent_id"]
+    st.session_state.bailian_agent_id = BAILIAN_AGENT_LIST[curr_index]["agent_id"]
 if "chat_sessions" not in st.session_state:
     st.session_state.chat_sessions = [] # Stores past chat sessions {name: str, messages: list, id: str}
 if "active_session_id" not in st.session_state: 
     st.session_state.active_session_id = None
 if "selected_agent_index" not in st.session_state:
-    st.session_state.selected_agent_index = 0
+    st.session_state.selected_agent_index = curr_index
+    st.session_state.agent_name = BAILIAN_AGENT_LIST[curr_index]['agent_name']
+    st.session_state.model_id = BAILIAN_AGENT_LIST[curr_index]['model_id']
+if "session_file_ids" not in st.session_state:
+    st.session_state.session_file_ids = [] 
 
 # --- 侧边栏 (Sidebar) ---
 with st.sidebar:
@@ -63,15 +73,21 @@ with st.sidebar:
         key="model_selector"
     )
     curr_index = model_display_names.index(selected_model_display_name)
-    st.session_state.selected_agent_index = curr_index
-    st.session_state.agent_id = BAILIAN_AGENT_LIST[curr_index]['agent_id']
-    st.session_state.agent_name = BAILIAN_AGENT_LIST[curr_index]['agent_name']
-    st.session_state.model_id = BAILIAN_AGENT_LIST[curr_index]['model_id']
+    if st.session_state.selected_agent_index != curr_index:
+        st.session_state.selected_agent_index = curr_index
+        st.session_state.bailian_agent_id = BAILIAN_AGENT_LIST[curr_index]['agent_id']
+        st.session_state.agent_name = BAILIAN_AGENT_LIST[curr_index]['agent_name']
+        st.session_state.model_id = BAILIAN_AGENT_LIST[curr_index]['model_id']
+        st.session_state.messages = [] 
+        st.session_state.active_session_id = None
+        st.session_state.session_file_ids = []
+        st.rerun()
 
     st.markdown("---")
     if st.button("开启新会话"):
         st.session_state.messages = [] 
         st.session_state.active_session_id = None
+        st.session_state.session_file_ids = []
         st.rerun()
 
 # --- 主聊天界面 (Main Chat Interface) ---
@@ -109,14 +125,25 @@ if prompt := st.chat_input(
 
         thinking_status = st.status("", expanded=True)
 
-        session_file_ids = []
         if prompt["files"]:
             thinking_status.update(label="解析文件...", state="running", expanded=True)    
             for fileobj in prompt["files"]:
-                # 上传文件
-                result = bailian_client.TransferUploadedFileFromStreamlit(fileobj, tags=[], CategoryId="default")
-                session_file_ids.append(result['FileId'])
-                thinking_status.write(fileobj.name)
+                try:
+                    # 上传文件
+                    result = bailian_client.TransferUploadedFileFromStreamlit(fileobj, tags=[], CategoryId="default", CategoryType="SESSION_FILE")
+                    file_id = result['FileId']
+                    st.session_state.session_file_ids.append(file_id)
+                    while True:
+                        result = bailian_client.DescribeDocument(file_id)
+                        if result['Status'] == 'FILE_IS_READY':
+                            thinking_status.write(f"**{fileobj.name}** ready")
+                            break
+                        if result['Status'] in ('PARSE_FAILED', 'SAFE_CHECK_FAILED', 'INDEX_BUILDING_FAILED', 'FILE_EXPIRED'):
+                            thinking_status.write(f"解析文件**{fileobj.name}**失败，{result['Status']}")
+                            break
+                        time.sleep(2)
+                except Exception as e:
+                    thinking_status.write(f"解析文件**{fileobj.name}**异常，{e}")
 
         thinking_status.update(label="思考中...", state="running", expanded=True)    
 
@@ -134,7 +161,7 @@ if prompt := st.chat_input(
             # 发起主智能体调用
             responses = Application.call(
                 api_key=st.session_state.api_key,
-                app_id=st.session_state.agent_id,
+                app_id=st.session_state.bailian_agent_id,
                 prompt=prompt.text,
                 session_id=st.session_state.active_session_id,
                 stream=True,
@@ -142,7 +169,7 @@ if prompt := st.chat_input(
                 has_thoughts=True,
                 biz_params=biz_params,
                 rag_options={
-                    "session_file_ids":session_file_ids
+                    "session_file_ids":st.session_state.session_file_ids
                 })   
         except Exception as e:
             full_response = f"请求异常：{e}"

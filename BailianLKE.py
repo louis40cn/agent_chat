@@ -154,7 +154,7 @@ class BailianLKE:
         return None
 
     # 上传Streamlit的UploadedFile文档到百炼数据管理，上传成功则返回FileId
-    def TransferUploadedFileFromStreamlit(self, uploaded_file, tags, CategoryId):
+    def TransferUploadedFileFromStreamlit(self, uploaded_file, tags, CategoryId='default', CategoryType='SESSION_FILE'):
         runtime = util_models.RuntimeOptions()
         headers = {}
 
@@ -162,7 +162,8 @@ class BailianLKE:
             apply_file_upload_lease_request = bailian_20231229_models.ApplyFileUploadLeaseRequest(
                 file_name=uploaded_file.name,
                 md_5=CalcFileMD5FromBytes(uploaded_file.getvalue()),
-                size_in_bytes=uploaded_file.size
+                size_in_bytes=uploaded_file.size,
+                category_type=CategoryType
             )
             # 申请文档上传租约
             resp = self.client.apply_file_upload_lease_with_options(CategoryId, self.WorkspaceId, apply_file_upload_lease_request, headers, runtime)
@@ -179,7 +180,8 @@ class BailianLKE:
                 lease_id=upload_lease['FileUploadLeaseId'],
                 parser='DASHSCOPE_DOCMIND',
                 category_id=CategoryId,
-                tags=tags
+                tags=tags,
+                category_type=CategoryType
             )
             resp = self.client.add_file_with_options(self.WorkspaceId,
                                         add_file_request, 
